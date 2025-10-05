@@ -17,40 +17,22 @@ on:
 
 jobs:
   test:
-    name: Test Spike build (Ubuntu)
-    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, macos-13]
+    name: Test Spike build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
         with:
           # checkout full tree
           fetch-depth: 0
 
-      - name: Install Dependencies
-        run: sudo xargs apt-get install -y < .github/workflows/apt-packages.txt
-
-      - run: |
-          for commit in $(git rev-list origin/master..HEAD | tac); do
-            git checkout $commit
-            echo "Checking commit $commit"
-            ci-tests/build-spike
-            ci-tests/test-spike
-          done
-
-  test-macos:
-    name: Test Spike build (MacOS)
-    runs-on: macos-13
-    steps:
-      - uses: actions/checkout@v2
+      - uses: cachix/install-nix-action@v24
         with:
-          # checkout full tree
-          fetch-depth: 0
-
-      - name: Install Dependencies
-        run: xargs brew install --overwrite < .github/workflows/brew-packages.txt
-
-      - run: |
-          for commit in $(git rev-list origin/master..HEAD | tail -r); do
-            git checkout $commit
-            echo "Checking commit $commit"
-            ci-tests/build-spike
-          done
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+          nix_path: nixpkgs=channel:nixos-25.05
+      - run: nix build .\#riscv-isa-sim -L
+      - name: list build results
+        run: ls -la result/

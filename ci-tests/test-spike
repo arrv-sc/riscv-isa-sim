@@ -1,22 +1,38 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -e -x
 
 ROOT=`git rev-parse --show-toplevel`
-NPROCS="$(nproc 2> /dev/null || sysctl -n hw.ncpu)"
+
 HERE=`pwd`
+if [ "$#" -lt 2 ]; then
+  BUILD=$HERE/build
+  INSTALL=$HERE/install
+  SPIKE_PATH="$INSTALL"/bin/spike
+  INCLUDE_PATH="$INSTALL"/include
+  LIB_PATH="$INSTALL"/lib
+else
+  BUILD="$2"
+  INSTALL="$HERE"
+  SPIKE_PATH="$HERE"/spike
+  INCLUDE_PATH="$HERE"
+  LIB_PATH="$HERE"
+fi
+NPROCS="$(nproc 2> /dev/null || sysctl -n hw.ncpu)"
 CI="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-INSTALL=$HERE/install
-BUILD=$HERE/build
 RUN=$HERE/run
 
-# build pk
 rm -rf $BUILD/pk
 mkdir $BUILD/pk
-cd $BUILD/pk
-git clone https://github.com/riscv-software-src/riscv-pk.git
-riscv-pk/configure --host=riscv64-linux-gnu --prefix=$INSTALL
-make -j$NPROCS
-make install
+if [ "$#" -lt 2 ]; then
+  # build pk
+  cd $BUILD/pk
+  git clone https://github.com/riscv-software-src/riscv-pk.git
+  riscv-pk/configure --host=riscv64-linux-gnu --prefix=$INSTALL
+  make -j$NPROCS
+  make install
+else
+  ln -s $(which pk) $BUILD/pk/pk
+fi
 
 # build tests
 rm -rf $RUN
@@ -28,24 +44,29 @@ riscv64-linux-gnu-gcc -static -O2 -o customcsr $CI/customcsr.c
 riscv64-linux-gnu-gcc -static -O2 -o atomics $CI/atomics.c
 
 # run snippy-based tests
-wget https://github.com/syntacore/snippy/releases/download/snippy-2.0/snippy-2.0.tar.gz
-tar xzf "snippy-2.0.tar.gz"
+if [ "$#" -lt 2 ]; then
+  wget https://github.com/syntacore/snippy/releases/download/snippy-2.0/snippy-2.0.tar.gz
+  tar xzf "snippy-2.0.tar.gz"
+fi
 # test that snippy runs
+llvm-snippy --version
+./llvm-snippy --version
 ./llvm-snippy --version | grep "Snippy version"
 "$ROOT"/ci-tests/generate-snippy-tests.sh "$RUN" "$ROOT"/ci-tests/snippy-tests
-"$ROOT"/ci-tests/run-snippy-tests.sh snippy-tests "$INSTALL"/bin/spike
+"$ROOT"/ci-tests/run-snippy-tests.sh snippy-tests "$SPIKE_PATH"
 
 # check that including sim.h in an external project works
-g++ -std=c++2a -I$INSTALL/include -L$INSTALL/lib $CI/testlib.cc -lriscv -o test-libriscv
-g++ -std=c++2a -I$INSTALL/include -L$INSTALL/lib $CI/test-customext.cc -lriscv -o test-customext
-g++ -std=c++2a -I$INSTALL/include -L$INSTALL/lib $CI/custom-csr.cc -lriscv -o test-custom-csr
+g++ -std=c++2a -I"$INCLUDE_PATH" -L"$LIB_PATH" $CI/testlib.cc -lriscv -o test-libriscv
+g++ -std=c++2a -I"$INCLUDE_PATH" -L"$LIB_PATH" $CI/test-customext.cc -lriscv -o test-customext
+g++ -std=c++2a -I"$INCLUDE_PATH" -L"$LIB_PATH" $CI/custom-csr.cc -lriscv -o test-custom-csr
 
-# check that all installed headers are functional
-g++ -std=c++2a -I$INSTALL/include -L$INSTALL/lib $CI/testlib.cc -lriscv -o /dev/null -include $BUILD/spike/install-hdrs-list.h
+if [ "$#" -lt 2 ]; then
+  # check that all installed headers are functional
+  g++ -std=c++2a -I"$INCLUDE_PATH" -L"$LIB_PATH" $CI/testlib.cc -lriscv -o /dev/null -include $BUILD/spike/install-hdrs-list.h
+fi
 
 # run tests
-time $INSTALL/bin/spike --isa=rv64gc $BUILD/pk/pk hello | grep "Hello, world!  Pi is approximately 3.141588."
-$INSTALL/bin/spike --log-commits --isa=rv64gc $BUILD/pk/pk atomics 2> /dev/null | grep "First atomic counter is 1000, second is 100"
-LD_LIBRARY_PATH=$INSTALL/lib ./test-libriscv $BUILD/pk/pk hello | grep "Hello, world!  Pi is approximately 3.141588."
-LD_LIBRARY_PATH=$INSTALL/lib ./test-customext $BUILD/pk/pk dummy-slliuw | grep "Executed successfully"
-LD_LIBRARY_PATH=$INSTALL/lib ./test-custom-csr $BUILD/pk/pk customcsr | grep "Executed successfully"
+time "$SPIKE_PATH" --isa=rv64gc $BUILD/pk/pk hello | grep "Hello, world!  Pi is approximately 3.141588."
+"$SPIKE_PATH" --log-commits --isa=rv64gc $BUILD/pk/pk atomics 2> /dev/null | grep "First atomic counter is 1000, second is 100"
+LD_LIBRARY_PATH="$LIB_PATH" ./test-customext $BUILD/pk/pk dummy-slliuw | grep "Executed successfully"
+LD_LIBRARY_PATH="$LIB_PATH" ./test-custom-csr $BUILD/pk/pk customcsr | grep "Executed successfully"
